@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#071225" />
+    <title>Lumen Drift</title>
+  </head>
+  <body>
+    <main id="app">
+      <canvas id="game-canvas" aria-label="Lumen Drift game view"></canvas>
+      <section class="hud" aria-live="polite">
+        <div class="brand">LUMEN <span>DRIFT</span></div>
+        <div class="meter"><span>BEACON CHARGE</span><div class="meter-track"><i id="charge-fill"></i></div><b id="charge-value">0 / 6</b></div>
+        <div class="timer" id="timer">01:00</div>
+      </section>
+      <section class="overlay" id="overlay">
+        <div class="panel">
+          <p class="eyebrow" id="overlay-kicker">NIGHT SHIFT 01</p>
+          <h1 id="overlay-title">LUMEN<br><em>DRIFT</em></h1>
+          <p id="overlay-message">漂うルーメンを集め、灯台の光を取り戻そう。</p>
+          <div class="controls"><span>WASD / 矢印キー</span><span>移動</span></div>
+          <button id="action-button" type="button">航行を開始</button>
+        </div>
+      </section>
+      <p class="hint" id="hint">嵐の輪に触れないように、光を集めよう</p>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
