@@ -10,16 +10,31 @@ import { History } from "../core/history";
 import {
   boundsVolume,
   copySelection,
+  mirrorClipboardX,
+  mirrorClipboardZ,
   pasteClipboard,
+  rotateClipboardY,
   Selection,
   SelectionTooLargeError,
   type Clipboard
 } from "../core/selection";
-import { editsMapToPlain, type DeathDropSaveData, type EquippedWeapon, type WorldSaveData } from "../core/save";
+import { editsMapToPlain, type EquippedWeapon, type ProgressSaveData, type WorldSaveData } from "../core/save";
 import type { GameSettings } from "../core/settings";
 import { World } from "../core/world";
 import type { Facing, Vec3Int } from "../core/types";
-import { saveAvatar, saveSettings, saveWorld } from "../core/storage";
+import {
+  generateId,
+  loadTutorialChecklistState,
+  saveAvatar,
+  saveBlueprint,
+  saveSettings,
+  saveTutorialChecklistState,
+  saveWorld
+} from "../core/storage";
+import { addDeathDrop, findNearestPickupableDrop, removeDeathDrop, MAX_DEATH_DROPS, type DeathDropEntry } from "../core/deathDrops";
+import { createBlueprintRecord, type BlueprintRecord } from "../core/blueprint";
+import { rollRuinTreasureLoot } from "../core/treasure";
+import { computeNewlyUnlocked } from "../core/achievements";
 import type { GameMode } from "../core/gameMode";
 import {
   applyDamage,
@@ -47,7 +62,7 @@ import {
 } from "../core/dayNight";
 import { recomputeCircuitNear } from "../core/circuit";
 import { getEntityDef, type EntityKind } from "../core/entities";
-import { findNearestLandPosition, getBiomeAt, BIOME_LABELS_JA } from "../core/biome";
+import { findNearestLandPosition, getBiomeAt, BIOME_LABELS_JA, type Biome } from "../core/biome";
 import { resolveWeatherKind, getWeatherIntensity, getWeatherLabelJa } from "../core/weather";
 import { TERRAIN_GENERATOR_VERSION_BIOMES } from "../core/terrain";
 
@@ -79,7 +94,11 @@ import { openSettingsPanel } from "../ui/settingsPanel";
 import { openPauseMenu } from "../ui/pauseMenu";
 import { openAvatarCreator } from "../ui/avatarCreator";
 import { showHelpOverlay } from "../ui/onboarding";
+import { openBuildMenu } from "../ui/buildMenu";
+import { openProgressPanel } from "../ui/achievementsPanel";
 import { showError, showToast } from "../ui/notifications";
+import { DebugHud } from "../ui/debugHud";
+import { TutorialChecklist } from "../ui/tutorialChecklist";
 
 const REACH_DISTANCE = 6;
 const AUTOSAVE_INTERVAL_MS = 20_000;
@@ -156,15 +175,24 @@ export class Game {
   private entitySystem: EntitySystem;
   private isDead = false;
   private lastDamageCauseJa = "不明な要因";
-  private deathDrop: DeathDropSaveData | null;
-  private deathMarker: THREE.Mesh | null = null;
+  private deathDrops: DeathDropEntry[];
+  private deathMarkers = new Map<string, THREE.Mesh>();
   // ---- Phase 3: バイオーム/天候 ----
   private weatherEffects: WeatherEffects;
   private environmentUpdateTimer = 0;
+  // ---- Phase 4: 探索/実績の進捗、建築補助のクリップボード変換 ----
+  private progress: ProgressSaveData;
+  // ---- Phase 5: デバッグHUD/はじめてのチェックリスト ----
+  private debugHud: DebugHud;
+  private tutorialChecklist: TutorialChecklist;
+  private tutorialDismissed = false;
+  private tutorialStateLoaded = false;
+  private fpsSmoothed = 0;
+  private hasMovedOrLooked = false;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
-    uiRoot: HTMLElement,
+    private readonly uiRoot: HTMLElement,
     worldSave: WorldSaveData,
     settings: GameSettings,
     avatar: AvatarConfig,
@@ -186,13 +214,22 @@ export class Game {
     this.equippedWeapon = worldSave.player.equippedWeapon;
     this.spawnPoint = worldSave.spawnPoint;
     this.bedPosition = worldSave.bedPosition;
-    this.deathDrop = worldSave.deathDrop
-      ? { position: { ...worldSave.deathDrop.position }, inventory: { ...worldSave.deathDrop.inventory } }
-      : null;
+    this.deathDrops = worldSave.deathDrops.map((d) => ({
+      id: d.id,
+      position: { ...d.position },
+      inventory: { ...d.inventory },
+      createdAt: d.createdAt
+    }));
     this.timeOfDaySeconds = worldSave.timeOfDaySeconds;
+    this.progress = {
+      ...worldSave.progress,
+      discoveredBiomes: [...worldSave.progress.discoveredBiomes],
+      unlockedAchievements: [...worldSave.progress.unlockedAchievements]
+    };
 
     this.world = new World(worldSave.seed, worldSave.seedText, worldSave.terrainGeneratorVersion);
     this.world.loadEdits(worldSave.edits.map((e) => [e[0], e[1]]));
+    this.world.loadLootedTreasures(worldSave.lootedTreasures);
 
     this.sceneSetup = createSceneSetup(canvas);
     resizeToWindow(this.sceneSetup);
@@ -210,25 +247,24 @@ export class Game {
 
     this.entitySystem = new EntitySystem(this.world, worldSave.seed);
     this.sceneSetup.scene.add(this.entitySystem.group);
+    // Phase 5: ワールドを開いた直後に一度だけ、保存されていた生存生物を復元する
+    // (通常のスポーン処理より前に呼ぶことで、二重出現を避ける)。
+    this.entitySystem.restoreEntities(worldSave.entities);
 
     this.setupPlayer();
     if (this.gameMode === "survival" && !isAlive(this.survivalStats)) {
       this.survivalStats = createInitialSurvivalStats();
       this.movePlayerToRespawnPoint();
     }
-    if (this.deathDrop) {
-      this.spawnDeathMarker(this.deathDrop.position);
+    for (const drop of this.deathDrops) {
+      this.spawnDeathMarker(drop.id, drop.position);
     }
 
     this.inputManager = new InputManager(canvas, settings.keyBindings);
     this.bindActions();
 
     if (isTouchCapable() && settings.touchControlsEnabled) {
-      this.touchControls = new TouchControls(uiRoot);
-      this.touchControls.onBreak(() => this.breakTargetedBlock());
-      this.touchControls.onPlace(() => this.placeTargetedBlock());
-      this.touchControls.onToggleFly(() => this.toggleFly());
-      this.touchControls.onInteract(() => this.interactWithTargetedBlock());
+      this.enableTouchControls();
     }
 
     this.hud = new Hud(uiRoot);
@@ -243,6 +279,32 @@ export class Game {
       this.hud.setHunger(this.survivalStats.hunger, MAX_HUNGER);
     }
     this.refreshQuickbarCounts();
+
+    this.debugHud = new DebugHud(uiRoot);
+    this.debugHud.setVisible(this.settings.debugHudEnabled);
+
+    this.tutorialChecklist = new TutorialChecklist(uiRoot, this.gameMode === "survival" ? "survival" : "creative");
+    this.tutorialChecklist.onDismiss(() => {
+      this.tutorialDismissed = true;
+      this.saveTutorialProgress();
+    });
+    if (this.gameMode === "survival") {
+      // サバイバルは開始直後から体力・空腹ゲージがHUDに表示されているため、
+      // このチェック項目は情報提示型として即座に完了扱いにする
+      // (クリエイティブの場合はtoggleFly()の実行時に完了させる)。
+      this.completeTutorialStep("modeSpecific");
+    }
+    void loadTutorialChecklistState(this.worldSave.id).then((state) => {
+      this.tutorialDismissed = state.dismissed;
+      this.tutorialChecklist.setCompletedSteps(
+        Array.from(new Set([...state.completedSteps, ...this.tutorialChecklist.getCompletedSteps()]))
+      );
+      this.tutorialStateLoaded = true;
+      this.saveTutorialProgress();
+      if (!state.dismissed && !this.tutorialChecklist.isAllDone()) {
+        this.tutorialChecklist.show();
+      }
+    });
 
     window.addEventListener("resize", this.onResize);
     window.addEventListener("wheel", this.onWheel, { passive: true });
@@ -273,6 +335,39 @@ export class Game {
     this.player.movementMode = this.gameMode === "survival" ? "walk" : p.movementMode;
   }
 
+  private saveTutorialProgress(): void {
+    if (!this.tutorialStateLoaded) return;
+    void saveTutorialChecklistState(this.worldSave.id, {
+      dismissed: this.tutorialDismissed,
+      completedSteps: this.tutorialChecklist.getCompletedSteps()
+    }).catch((err) => {
+      showError(`チェックリストの保存に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
+
+  private completeTutorialStep(step: Parameters<TutorialChecklist["markDone"]>[0]): void {
+    if (this.tutorialChecklist.markDone(step)) {
+      this.saveTutorialProgress();
+    }
+  }
+
+  /** Phase 5: タッチ操作UIを生成し、イベントを配線する。 */
+  private enableTouchControls(): void {
+    if (this.touchControls) return;
+    this.touchControls = new TouchControls(this.uiRoot);
+    this.touchControls.onBreak(() => this.breakTargetedBlock());
+    this.touchControls.onPlace(() => this.placeTargetedBlock());
+    this.touchControls.onToggleFly(() => this.toggleFly());
+    this.touchControls.onInteract(() => this.interactWithTargetedBlock());
+  }
+
+  /** Phase 5: タッチ操作UIを破棄する (windowリスナーの重複を防ぐため、dispose()で確実に解除する)。 */
+  private disableTouchControls(): void {
+    if (!this.touchControls) return;
+    this.touchControls.dispose();
+    this.touchControls = null;
+  }
+
   private applyGraphicsSettings(): void {
     const { renderer, camera, scene } = this.sceneSetup;
     camera.fov = this.settings.fovDeg;
@@ -291,6 +386,7 @@ export class Game {
     this.inputManager.on("toggleCamera", () => {
       this.player.toggleCamera();
       this.audio.playUiClick();
+      this.completeTutorialStep("camera");
     });
     this.inputManager.on("interact", () => this.interactWithTargetedBlock());
     this.inputManager.on("undo", () => this.performUndo());
@@ -300,6 +396,8 @@ export class Game {
     this.inputManager.on("selectionPaste", () => this.pasteClipboardAtTarget());
     this.inputManager.on("openInventory", () => this.openInventory());
     this.inputManager.on("openSettings", () => this.openPause());
+    this.inputManager.on("openBuildMenu", () => this.openBuildMenuUi());
+    this.inputManager.on("openProgress", () => this.openProgressUi());
   }
 
   private onCanvasClickEnsureAudio = (): void => {
@@ -337,6 +435,7 @@ export class Game {
     }
     this.player.toggleFly();
     this.audio.playUiClick();
+    this.completeTutorialStep("modeSpecific");
   }
 
   private updateHighlights(): void {
@@ -349,6 +448,11 @@ export class Game {
       this.blockHighlight.visible = false;
     }
 
+    if (this.selecting && this.currentHit) {
+      // 2点目を確定する前でも、狙っている位置に合わせて選択範囲のプレビューを
+      // リアルタイムに更新する (ドラッグ操作は行わず、視点移動だけで範囲を確認できる)。
+      this.selection.update(this.currentHit.block);
+    }
     const bounds = this.selection.getBounds();
     if (bounds) {
       positionSelectionHighlight(this.selectionHighlight, bounds);
@@ -372,7 +476,8 @@ export class Game {
     });
     this.worldRenderer.markDirtyAtWorldPos(x, z);
     this.audio.playBreakBlock();
-    recomputeCircuitNear(this.world, { x, y, z });
+    this.checkCircuitPoweredAchievement(recomputeCircuitNear(this.world, { x, y, z }).changed);
+    this.completeTutorialStep("placeBreak");
 
     if (this.gameMode === "survival") {
       const brokenDef = getBlockDef(prevId);
@@ -421,7 +526,10 @@ export class Game {
     });
     this.worldRenderer.markDirtyAtWorldPos(x, z);
     this.audio.playPlaceBlock();
-    recomputeCircuitNear(this.world, { x, y, z });
+    this.checkCircuitPoweredAchievement(recomputeCircuitNear(this.world, { x, y, z }).changed);
+    this.progress.placedBlocksCount += 1;
+    this.evaluateAchievements();
+    this.completeTutorialStep("placeBreak");
 
     if (this.gameMode === "survival") {
       const placedDef = getBlockDef(blockId);
@@ -447,6 +555,10 @@ export class Game {
       }
       this.refreshQuickbarCounts();
       showToast(`${result.nameJa}をたおした!`, "success");
+      if (getEntityDef(result.kind).temperament === "hostile") {
+        this.progress.defeatedHostilesCount += 1;
+        this.evaluateAchievements();
+      }
     }
     return true;
   }
@@ -485,7 +597,7 @@ export class Game {
       this.world.setBlock(x, y, z, id, facing, !open);
       this.worldRenderer.markDirtyAtWorldPos(x, z);
       this.audio.playDoor();
-      recomputeCircuitNear(this.world, { x, y, z });
+      this.checkCircuitPoweredAchievement(recomputeCircuitNear(this.world, { x, y, z }).changed);
       return;
     }
 
@@ -495,7 +607,12 @@ export class Game {
       this.world.setBlock(x, y, z, id, facing, !on);
       this.worldRenderer.markDirtyAtWorldPos(x, z);
       this.audio.playSwitch();
-      recomputeCircuitNear(this.world, { x, y, z });
+      this.checkCircuitPoweredAchievement(recomputeCircuitNear(this.world, { x, y, z }).changed);
+      return;
+    }
+
+    if (def.shape === "chest") {
+      this.interactWithChest(x, y, z, id);
       return;
     }
 
@@ -504,6 +621,64 @@ export class Game {
       showToast("ベッドを復活地点に設定しました。", "success");
       this.audio.playUiClick();
     }
+  }
+
+  /**
+   * 宝箱の開閉。生成された遺跡の宝箱 (isGeneratedRuinChestLocation) かつ未開封の場合のみ、
+   * シード+座標から決定論的に1回だけ戦利品を渡す。開封済みマーカーは座標ベースで永続化され、
+   * ブロックを壊して置き直しても (生成された座標である限り) 再度は渡さない一方、
+   * プレイヤーが設置した宝箱 (生成座標ではない場所) には絶対に戦利品を発生させない。
+   */
+  private interactWithChest(x: number, y: number, z: number, id: number): void {
+    const facing = this.world.getBlockFacing(x, y, z);
+    const open = this.world.isBlockOpen(x, y, z);
+    this.world.setBlock(x, y, z, id, facing, !open);
+    this.worldRenderer.markDirtyAtWorldPos(x, z);
+    this.audio.playDoor();
+
+    if (open) {
+      // 既に開いている宝箱を閉じるだけの操作 (戦利品には影響しない)。
+      return;
+    }
+
+    if (this.world.isGeneratedRuinChestLocation(x, y, z) && !this.world.isTreasureLooted(x, y, z)) {
+      const loot = rollRuinTreasureLoot(this.world.seed, x, y, z);
+      for (const drop of loot) {
+        this.inventory = addItem(this.inventory, drop.key, drop.count);
+      }
+      this.world.markTreasureLooted(x, y, z);
+      this.refreshQuickbarCounts();
+      this.progress.openedTreasureCount += 1;
+      this.evaluateAchievements();
+      showToast("宝箱を開けた! 掘り出し物が見つかった。", "success");
+    } else {
+      showToast("宝箱を開けた。", "info");
+    }
+  }
+
+  /** 実績: 変化したブロック一覧の中にランプが含まれ、通電状態になったら「電気の魔術師」を解除する。 */
+  private checkCircuitPoweredAchievement(changed: Vec3Int[]): void {
+    if (this.progress.circuitPoweredEver) return;
+    for (const pos of changed) {
+      const blockId = this.world.getBlockId(pos.x, pos.y, pos.z);
+      if (blockId === AIR_ID) continue;
+      if (getBlockDef(blockId).shape === "lamp" && this.world.isBlockOpen(pos.x, pos.y, pos.z)) {
+        this.progress.circuitPoweredEver = true;
+        this.evaluateAchievements();
+        return;
+      }
+    }
+  }
+
+  /** 進捗カウンターの変化に応じて、新たに解除された実績があればトースト表示し記録する。 */
+  private evaluateAchievements(): void {
+    const newly = computeNewlyUnlocked(this.progress, this.progress.unlockedAchievements);
+    if (newly.length === 0) return;
+    this.progress.unlockedAchievements = [...this.progress.unlockedAchievements, ...newly.map((a) => a.id)];
+    for (const achievement of newly) {
+      showToast(`実績解除: ${achievement.nameJa} — ${achievement.descriptionJa}`, "success");
+    }
+    this.audio.playUiClick();
   }
 
   /** サバイバルモード用: クイックバーに表示するブロック所持数を更新する (クリエイティブでは非表示)。 */
@@ -587,9 +762,29 @@ export class Game {
       this.environmentUpdateTimer = 0.5;
       const weatherIcon = weatherKind === "rain" ? "🌧" : weatherKind === "snow" ? "❄" : "☀";
       this.hud.setEnvironment(BIOME_LABELS_JA[biome], getWeatherLabelJa(weatherKind), weatherIcon);
+      this.recordBiomeAndCaveDiscovery(biome);
     }
 
     return intensity;
+  }
+
+  /** 実績: 訪れたバイオームの記録と、自然生成された洞窟への初侵入を記録する (0.5秒おきの間引きで呼ばれる)。 */
+  private recordBiomeAndCaveDiscovery(biome: Biome): void {
+    let changed = false;
+    if (!this.progress.discoveredBiomes.includes(biome)) {
+      this.progress.discoveredBiomes = [...this.progress.discoveredBiomes, biome];
+      changed = true;
+    }
+    if (!this.progress.caveDiscovered) {
+      const px = Math.floor(this.player.position.x);
+      const py = Math.floor(this.player.position.y);
+      const pz = Math.floor(this.player.position.z);
+      if (this.world.isNaturalCaveAt(px, py, pz)) {
+        this.progress.caveDiscovered = true;
+        changed = true;
+      }
+    }
+    if (changed) this.evaluateAchievements();
   }
 
   /** 現在の状況に応じた操作ヒントを1行で返す。 */
@@ -611,6 +806,7 @@ export class Game {
         if (shape === "door") return "[E] ドアを開閉";
         if (shape === "switch") return "[E] スイッチを切り替え";
         if (shape === "bed") return "[E] 復活地点に設定";
+        if (shape === "chest") return this.world.isBlockOpen(x, y, z) ? "[E] 宝箱を閉じる" : "[E] 宝箱を開ける";
       }
     }
     return "";
@@ -636,15 +832,23 @@ export class Game {
       y: Math.floor(this.player.position.y),
       z: Math.floor(this.player.position.z)
     };
-    let droppedInventory = { ...this.inventory };
-    if (this.deathDrop) {
-      for (const [key, count] of Object.entries(this.deathDrop.inventory)) {
-        droppedInventory = addItem(droppedInventory, key, count);
-      }
-      showToast("前回の落とし物も新しい死亡地点へ移動しました。", "info");
+    const priorCount = this.deathDrops.length;
+    const entry: DeathDropEntry = {
+      id: generateId(),
+      position: dropPos,
+      inventory: { ...this.inventory },
+      createdAt: Date.now()
+    };
+    this.deathDrops = addDeathDrop(this.deathDrops, entry);
+    if (this.deathDrops.length <= priorCount) {
+      // 上限(MAX_DEATH_DROPS)に達していたため、最古のドロップが次点のドロップへ合流した
+      // (中身は失われないが、マーカーの数は減る)。
+      showToast(
+        `死亡地点の落とし物が上限(${MAX_DEATH_DROPS}件)に達したため、最も古い落とし物を近くのものへまとめました。`,
+        "info"
+      );
     }
-    this.deathDrop = { position: dropPos, inventory: droppedInventory };
-    this.spawnDeathMarker(dropPos);
+    this.syncDeathMarkers();
     this.inventory = createEmptyInventory();
     this.equippedWeapon = "fist";
     this.refreshQuickbarCounts();
@@ -654,24 +858,39 @@ export class Game {
     showDeathScreen(this.lastDamageCauseJa, () => this.respawnPlayer());
   }
 
-  private spawnDeathMarker(pos: Vec3Int): void {
-    this.clearDeathMarker();
+  private spawnDeathMarker(id: string, pos: Vec3Int): void {
     const geometry = new THREE.BoxGeometry(0.6, 0.6, 0.6);
     const material = new THREE.MeshStandardMaterial({ color: 0x3a2a1e, roughness: 0.85 });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(pos.x + 0.5, pos.y + 0.4, pos.z + 0.5);
     this.sceneSetup.scene.add(mesh);
-    this.deathMarker = mesh;
+    this.deathMarkers.set(id, mesh);
   }
 
-  private clearDeathMarker(): void {
-    if (!this.deathMarker) return;
-    this.sceneSetup.scene.remove(this.deathMarker);
-    this.deathMarker.geometry.dispose();
-    const mat = this.deathMarker.material;
+  private clearDeathMarker(id: string): void {
+    const mesh = this.deathMarkers.get(id);
+    if (!mesh) return;
+    this.sceneSetup.scene.remove(mesh);
+    mesh.geometry.dispose();
+    const mat = mesh.material;
     if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
     else mat.dispose();
-    this.deathMarker = null;
+    this.deathMarkers.delete(id);
+  }
+
+  /** マーカーの集合を this.deathDrops の現在の内容 (id集合) と一致させる。 */
+  private syncDeathMarkers(): void {
+    const validIds = new Set(this.deathDrops.map((d) => d.id));
+    for (const id of Array.from(this.deathMarkers.keys())) {
+      if (!validIds.has(id)) this.clearDeathMarker(id);
+    }
+    for (const drop of this.deathDrops) {
+      if (!this.deathMarkers.has(drop.id)) this.spawnDeathMarker(drop.id, drop.position);
+    }
+  }
+
+  private disposeAllDeathMarkers(): void {
+    for (const id of Array.from(this.deathMarkers.keys())) this.clearDeathMarker(id);
   }
 
   private respawnPlayer(): void {
@@ -690,19 +909,17 @@ export class Game {
     this.player.position.set(target.x + 0.5, target.y + 1, target.z + 0.5);
   }
 
-  /** 死亡地点に近づいたら、落とした持ち物を自動で回収する。 */
+  /** 死亡地点に近づいたら、最も近い落とし物を自動で回収する (1フレームに1個まで)。 */
   private checkDeathDropPickup(): void {
-    if (!this.deathDrop) return;
-    const dx = this.player.position.x - (this.deathDrop.position.x + 0.5);
-    const dz = this.player.position.z - (this.deathDrop.position.z + 0.5);
-    const dy = this.player.position.y - this.deathDrop.position.y;
-    if (dx * dx + dz * dz > DEATH_DROP_PICKUP_RADIUS * DEATH_DROP_PICKUP_RADIUS || Math.abs(dy) > 2.5) return;
-    for (const [key, count] of Object.entries(this.deathDrop.inventory)) {
+    if (this.deathDrops.length === 0) return;
+    const nearest = findNearestPickupableDrop(this.deathDrops, this.player.position, DEATH_DROP_PICKUP_RADIUS, 2.5);
+    if (!nearest) return;
+    for (const [key, count] of Object.entries(nearest.inventory)) {
       this.inventory = addItem(this.inventory, key, count);
     }
     this.refreshQuickbarCounts();
-    this.clearDeathMarker();
-    this.deathDrop = null;
+    this.deathDrops = removeDeathDrop(this.deathDrops, nearest.id);
+    this.clearDeathMarker(nearest.id);
     void this.persist();
     showToast("落とした持ち物を回収した。", "success");
   }
@@ -793,13 +1010,96 @@ export class Game {
     if (changes.length > 0) {
       this.history.push({ changes });
       this.markDirtyForChanges(changes);
+      const placedCount = changes.filter((change) => change.newId !== AIR_ID).length;
+      if (placedCount > 0) {
+        this.progress.placedBlocksCount += placedCount;
+        this.evaluateAchievements();
+      }
     }
     this.audio.playPlaceBlock();
     showToast(`${changes.length}個のブロックを貼り付けました。`, "success");
   }
 
+  /** クリップボードをY軸周りに90度回転する (時計回り/反時計回り)。クリエイティブ専用。 */
+  private rotateClipboard(direction: "cw" | "ccw"): void {
+    if (this.gameMode === "survival") {
+      showError("回転はクリエイティブモードでのみ使用できます (資源の複製を防ぐため)。");
+      return;
+    }
+    if (!this.clipboard) {
+      showError("回転するクリップボードがありません。まずコピーしてください。");
+      return;
+    }
+    this.clipboard = rotateClipboardY(this.clipboard, direction);
+    showToast(`クリップボードを${direction === "cw" ? "時計回り" : "反時計回り"}に90度回転しました。`, "success");
+    this.audio.playUiClick();
+  }
+
+  /** クリップボードをX軸またはZ軸方向に反転する。クリエイティブ専用。 */
+  private mirrorClipboard(axis: "x" | "z"): void {
+    if (this.gameMode === "survival") {
+      showError("反転はクリエイティブモードでのみ使用できます (資源の複製を防ぐため)。");
+      return;
+    }
+    if (!this.clipboard) {
+      showError("反転するクリップボードがありません。まずコピーしてください。");
+      return;
+    }
+    this.clipboard = axis === "x" ? mirrorClipboardX(this.clipboard) : mirrorClipboardZ(this.clipboard);
+    showToast(`クリップボードを${axis === "x" ? "X軸" : "Z軸"}方向に反転しました。`, "success");
+    this.audio.playUiClick();
+  }
+
+  /** 現在のクリップボードに名前を付けて設計図として保存する。クリエイティブ専用。 */
+  private async saveClipboardAsBlueprint(rawName: string): Promise<BlueprintRecord | null> {
+    if (this.gameMode === "survival") {
+      showError("設計図の保存はクリエイティブモードでのみ使用できます。");
+      return null;
+    }
+    if (!this.clipboard) {
+      showError("保存するクリップボードがありません。まずコピーしてください。");
+      return null;
+    }
+    const record = createBlueprintRecord({ id: generateId(), name: rawName, clipboard: this.clipboard, now: Date.now() });
+    await saveBlueprint(record);
+    showToast(`設計図「${record.name}」を保存しました。`, "success");
+    this.audio.playUiClick();
+    return record;
+  }
+
+  /** 設計図の内容をクリップボードへ読み込む。クリエイティブ専用。 */
+  private loadBlueprintIntoClipboard(record: BlueprintRecord): void {
+    if (this.gameMode === "survival") {
+      showError("設計図の読み込みはクリエイティブモードでのみ使用できます。");
+      return;
+    }
+    this.clipboard = record.clipboard;
+    showToast(`設計図「${record.name}」をクリップボードに読み込みました。貼り付けできます。`, "success");
+    this.audio.playUiClick();
+  }
+
+  private openBuildMenuUi(): void {
+    this.audio.playUiClick();
+    openBuildMenu({
+      gameMode: this.gameMode,
+      settings: this.settings,
+      getClipboard: () => this.clipboard,
+      onRotate: (direction) => this.rotateClipboard(direction),
+      onMirror: (axis) => this.mirrorClipboard(axis),
+      onPaste: () => this.pasteClipboardAtTarget(),
+      onSaveBlueprint: (name) => this.saveClipboardAsBlueprint(name),
+      onLoadBlueprint: (record) => this.loadBlueprintIntoClipboard(record)
+    });
+  }
+
+  private openProgressUi(): void {
+    this.audio.playUiClick();
+    openProgressPanel(this.progress);
+  }
+
   private openInventory(): void {
     this.audio.playUiClick();
+    this.completeTutorialStep("inventory");
     if (this.gameMode === "survival") {
       openSurvivalPanel(
         () => this.inventory,
@@ -815,6 +1115,8 @@ export class Game {
           this.refreshQuickbarCounts();
           this.audio.playCraft();
           showToast(`${recipe.nameJa}を作った!`, "success");
+          this.progress.craftedItemsCount += 1;
+          this.evaluateAchievements();
         },
         (blockKey) => {
           const blockId = getBlockDefByKey(blockKey).id;
@@ -841,9 +1143,19 @@ export class Game {
       },
       onOpenSettings: () => {
         openSettingsPanel(this.settings, this.inputManager, (next) => {
+          const prevTouchEnabled = this.settings.touchControlsEnabled;
           this.settings = next;
           this.applyGraphicsSettings();
           this.inputManager.applySettings(next);
+          this.debugHud.setVisible(next.debugHudEnabled);
+          if (next.touchControlsEnabled !== prevTouchEnabled) {
+            if (next.touchControlsEnabled) {
+              // タッチ非対応端末でも、動作確認用に手動で有効化した場合は表示を許可する。
+              this.enableTouchControls();
+            } else {
+              this.disableTouchControls();
+            }
+          }
           void saveSettings(next).catch((err) => {
             showError(`設定の保存に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
           });
@@ -860,6 +1172,13 @@ export class Game {
             showError(`アバターの保存に失敗しました: ${err instanceof Error ? err.message : String(err)}`);
           });
         });
+      },
+      onOpenBuildMenu: () => this.openBuildMenuUi(),
+      onOpenProgress: () => this.openProgressUi(),
+      onOpenTutorial: () => {
+        this.tutorialDismissed = false;
+        this.saveTutorialProgress();
+        this.tutorialChecklist.show();
       },
       onBackToTitle: () => {
         void this.persist().then(() => {
@@ -892,12 +1211,22 @@ export class Game {
         inventory: { ...this.inventory },
         spawnPoint: this.spawnPoint,
         bedPosition: this.bedPosition,
-        deathDrop: this.deathDrop
-          ? { position: { ...this.deathDrop.position }, inventory: { ...this.deathDrop.inventory } }
-          : null,
+        deathDrops: this.deathDrops.map((d) => ({
+          id: d.id,
+          position: { ...d.position },
+          inventory: { ...d.inventory },
+          createdAt: d.createdAt
+        })),
         timeOfDaySeconds: this.timeOfDaySeconds,
         terrainGeneratorVersion: this.world.generatorVersion,
-        edits: editsMapToPlain(this.world.getAllEdits())
+        edits: editsMapToPlain(this.world.getAllEdits()),
+        progress: {
+          ...this.progress,
+          discoveredBiomes: [...this.progress.discoveredBiomes],
+          unlockedAchievements: [...this.progress.unlockedAchievements]
+        },
+        lootedTreasures: this.world.getLootedTreasures(),
+        entities: this.entitySystem.getSnapshot()
       };
       await saveWorld(this.worldSave);
     } catch (err) {
@@ -937,6 +1266,10 @@ export class Game {
         moveInput.right ||
         (moveInput.analogX !== undefined && Math.abs(moveInput.analogX) > 0.05) ||
         (moveInput.analogZ !== undefined && Math.abs(moveInput.analogZ) > 0.05);
+      if (!this.hasMovedOrLooked && (moving || Math.abs(mouseDelta.dx) > 0.001 || Math.abs(mouseDelta.dy) > 0.001)) {
+        this.hasMovedOrLooked = true;
+        this.completeTutorialStep("moveLook");
+      }
       this.walkClock += dt;
       animateWalk(this.characterParts, this.walkClock, moving && this.player.onGround);
 
@@ -993,6 +1326,21 @@ export class Game {
       }
     }
 
+    if (this.settings.debugHudEnabled) {
+      const instantFps = dt > 0 ? 1 / dt : 0;
+      this.fpsSmoothed = this.fpsSmoothed === 0 ? instantFps : this.fpsSmoothed * 0.9 + instantFps * 0.1;
+      const info = this.sceneSetup.renderer.info;
+      const diagnostics = this.worldRenderer.diagnostics;
+      this.debugHud.update({
+        fps: this.fpsSmoothed,
+        loadedChunks: diagnostics.loadedChunks,
+        queuedChunks: diagnostics.queuedChunks,
+        entityCount: this.entitySystem.liveCount,
+        drawCalls: info.render.calls,
+        triangles: info.render.triangles
+      });
+    }
+
     this.sceneSetup.renderer.render(this.sceneSetup.scene, this.sceneSetup.camera);
     this.rafId = requestAnimationFrame(this.loop);
   };
@@ -1010,11 +1358,13 @@ export class Game {
     this.worldRenderer.disposeAll();
     this.entitySystem.dispose();
     this.sceneSetup.scene.remove(this.entitySystem.group);
-    this.clearDeathMarker();
+    this.disposeAllDeathMarkers();
     this.weatherEffects.dispose(this.sceneSetup.scene);
     this.audio.dispose();
     this.sceneSetup.renderer.dispose();
     this.hud.root.remove();
+    this.debugHud.dispose();
+    this.tutorialChecklist.dispose();
     this.touchControls?.dispose();
     this.blockHighlight.geometry.dispose();
     this.selectionHighlight.geometry.dispose();

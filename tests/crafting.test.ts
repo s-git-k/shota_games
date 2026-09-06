@@ -71,4 +71,14 @@ describe("crafting", () => {
     expect(RECIPES.some((r) => r.id === "wire")).toBe(true);
     expect(RECIPES.some((r) => r.id === "lamp")).toBe(true);
   });
+
+  it("Phase 4の家具レシピ (宝箱/テーブル/いす) が存在し、木の板から作れる", () => {
+    for (const id of ["chest", "table", "chair"]) {
+      const recipe = getRecipe(id);
+      const inv = addItem(createEmptyInventory(), "planks", 20);
+      const result = craftItem(inv, recipe);
+      expect(result.ok).toBe(true);
+      expect(getCount(result.inventory, recipe.outputKey)).toBe(recipe.outputCount);
+    }
+  });
 });

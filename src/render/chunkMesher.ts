@@ -135,7 +135,7 @@ export function buildChunkMesh(world: World, chunk: Chunk): ChunkMeshResult {
           if (ny < 0 || ny >= CHUNK_HEIGHT) {
             neighborId = 0;
           } else if (nx < 0 || nx >= CHUNK_SIZE_X || nz < 0 || nz >= CHUNK_SIZE_Z) {
-            neighborId = world.getBlockId(wx + face.dx, ny, wz + face.dz);
+            neighborId = world.getLoadedBlockId(wx + face.dx, ny, wz + face.dz);
           } else {
             neighborId = chunk.getId(nx, ny, nz);
           }

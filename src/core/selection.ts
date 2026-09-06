@@ -74,6 +74,68 @@ export class Selection {
   }
 }
 
+/**
+ * facing (向き: 0=北/-z, 1=西/-x, 2=南/+z, 3=東/+x) を、上から見て時計回りに90度回す。
+ * 例: 北(0)を向いていたドアは、時計回りに回すと東(3)を向く。
+ */
+export function rotateFacingCW(facing: Facing): Facing {
+  return (((facing + 3) % 4) as Facing);
+}
+
+/** facing を、上から見て反時計回りに90度回す (rotateFacingCW の逆変換)。 */
+export function rotateFacingCCW(facing: Facing): Facing {
+  return (((facing + 1) % 4) as Facing);
+}
+
+/** facing を X軸方向 (東西) に反転させたときの新しい向き。 */
+export function mirrorFacingX(facing: Facing): Facing {
+  return (((4 - facing) % 4) as Facing);
+}
+
+/** facing を Z軸方向 (南北) に反転させたときの新しい向き。 */
+export function mirrorFacingZ(facing: Facing): Facing {
+  return (((6 - facing) % 4) as Facing);
+}
+
+/**
+ * クリップボードを水平 (Y軸周り) に90度回転させる。cells の dx/dz と、
+ * 階段/ドア/スイッチなどが持つ facing の両方を、幾何学的に矛盾なく一緒に回す。
+ * dy (高さ) と open は回転の影響を受けない。
+ */
+export function rotateClipboardY(clipboard: Clipboard, direction: "cw" | "ccw"): Clipboard {
+  const { sizeX, sizeZ } = clipboard;
+  const rotateFacing = direction === "cw" ? rotateFacingCW : rotateFacingCCW;
+  const cells: ClipboardCell[] = clipboard.cells.map((cell) => {
+    const { dx, dz } = cell;
+    const [nx, nz] =
+      direction === "cw" ? [sizeZ - 1 - dz, dx] : [dz, sizeX - 1 - dx];
+    return { ...cell, dx: nx, dz: nz, facing: rotateFacing(cell.facing) };
+  });
+  return { sizeX: sizeZ, sizeY: clipboard.sizeY, sizeZ: sizeX, cells };
+}
+
+/** クリップボードをX軸方向 (東西) に鏡映反転する。facing・cell位置ともに矛盾なく反転する。 */
+export function mirrorClipboardX(clipboard: Clipboard): Clipboard {
+  const { sizeX } = clipboard;
+  const cells: ClipboardCell[] = clipboard.cells.map((cell) => ({
+    ...cell,
+    dx: sizeX - 1 - cell.dx,
+    facing: mirrorFacingX(cell.facing)
+  }));
+  return { ...clipboard, cells };
+}
+
+/** クリップボードをZ軸方向 (南北) に鏡映反転する。facing・cell位置ともに矛盾なく反転する。 */
+export function mirrorClipboardZ(clipboard: Clipboard): Clipboard {
+  const { sizeZ } = clipboard;
+  const cells: ClipboardCell[] = clipboard.cells.map((cell) => ({
+    ...cell,
+    dz: sizeZ - 1 - cell.dz,
+    facing: mirrorFacingZ(cell.facing)
+  }));
+  return { ...clipboard, cells };
+}
+
 /** 選択範囲をワールドから読み取ってクリップボードを作る。 */
 export function copySelection(world: World, bounds: SelectionBounds): Clipboard {
   const sizeX = bounds.max.x - bounds.min.x + 1;
@@ -112,7 +174,8 @@ export function pasteClipboard(world: World, clipboard: Clipboard, origin: Vec3I
     const prevFacing = world.getBlockFacing(x, y, z);
     const prevOpen = world.isBlockOpen(x, y, z);
     if (prevId === cell.id && prevFacing === cell.facing && prevOpen === cell.open) continue;
-    world.setBlock(x, y, z, cell.id, cell.facing, cell.open);
+    const result = world.setBlock(x, y, z, cell.id, cell.facing, cell.open);
+    if (!result.changed) continue;
     changes.push({
       x,
       y,

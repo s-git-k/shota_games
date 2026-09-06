@@ -1,6 +1,7 @@
 /**
  * ブロック定義レジストリ。
- * Phase 1では空気を除く32種類、Phase 2では回路パーツ4種を追加し合計36種類を実装。
+ * Phase 1では空気を除く32種類、Phase 2では回路パーツ4種、Phase 3では水を追加し37種類、
+ * Phase 4では宝箱・テーブル・いすを追加し合計40種類 (上限) を実装。
  * 今後も拡張しやすいように、カテゴリ・形状・物理性質を持つデータ駆動の構造にしている。
  */
 
@@ -15,7 +16,10 @@ export type BlockShape =
   | "switch"
   | "wire"
   | "lamp"
-  | "bed";
+  | "bed"
+  | "chest"
+  | "table"
+  | "chair";
 
 export type BlockCategory = "terrain" | "wood" | "stone" | "special" | "circuit";
 
@@ -145,6 +149,31 @@ export const BLOCKS: readonly BlockDefinition[] = [
     solidDefault: false,
     // 地形生成が自動配置するための素材であり、クイックバー初期パレットには含めない
     inPalette: false
+  }),
+  // ---- Phase 4: 探索・家具 (合計40種の上限に収めるため、宝箱+家具2種までに限定) ----
+  def({
+    id: 38,
+    key: "chest",
+    nameJa: "宝箱",
+    category: "special",
+    shape: "chest",
+    color: 0x8a5a34
+  }),
+  def({
+    id: 39,
+    key: "table",
+    nameJa: "テーブル",
+    category: "special",
+    shape: "table",
+    color: 0xd9a066
+  }),
+  def({
+    id: 40,
+    key: "chair",
+    nameJa: "いす",
+    category: "special",
+    shape: "chair",
+    color: 0xd9a066
   })
 ];
 

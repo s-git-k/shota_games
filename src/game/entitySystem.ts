@@ -20,6 +20,7 @@ import {
   pickSpawnOffset,
   shouldAttemptSpawn,
   canSpawnHostileAt,
+  ensureEntityIdCounterAtLeast,
   type EntityRuntime
 } from "../core/entityAI";
 import { isNight } from "../core/dayNight";
@@ -66,12 +67,40 @@ export class EntitySystem {
   }
 
   private spawnEntity(kind: EntityKind, x: number, y: number, z: number): void {
-    const runtime = createEntityRuntime(kind, x, y, z, this.rng() * Math.PI * 2);
+    let runtime = createEntityRuntime(kind, x, y, z, this.rng() * Math.PI * 2);
+    while (this.visuals.has(runtime.id)) {
+      runtime = createEntityRuntime(kind, x, y, z, runtime.yaw);
+    }
     this.entities.push(runtime);
     const visual = buildEntityVisual(kind);
     visual.root.position.set(x, y, z);
     this.group.add(visual.root);
     this.visuals.set(runtime.id, visual);
+  }
+
+  /**
+   * Phase 5: 保存データから生存中の生物を復元する。ワールドを開いた直後に一度だけ
+   * 呼び出す想定 (通常のスポーン処理より前に呼ぶことで、二重出現を避ける)。
+   * 復元後は、以後発行されるIDが復元済みIDと衝突しないようカウンターを引き上げる。
+   */
+  restoreEntities(entities: readonly EntityRuntime[]): void {
+    let maxId = 0;
+    for (const runtime of entities) {
+      const copy: EntityRuntime = { ...runtime };
+      this.entities.push(copy);
+      const visual = buildEntityVisual(copy.kind);
+      visual.root.position.set(copy.x, copy.y, copy.z);
+      visual.root.rotation.y = copy.yaw;
+      this.group.add(visual.root);
+      this.visuals.set(copy.id, visual);
+      if (copy.id > maxId) maxId = copy.id;
+    }
+    if (maxId > 0) ensureEntityIdCounterAtLeast(maxId + 1);
+  }
+
+  /** Phase 5: 保存用のスナップショット (現在生存している全生物の複製) を返す。 */
+  getSnapshot(): EntityRuntime[] {
+    return this.entities.map((e) => ({ ...e }));
   }
 
   private countByTemperament(temperament: "hostile" | "friendly"): number {

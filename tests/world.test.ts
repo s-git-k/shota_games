@@ -3,7 +3,12 @@ import type { BlockEdit } from "../src/core/world";
 import { World } from "../src/core/world";
 import { getBlockDefByKey, AIR_ID } from "../src/core/blocks";
 import { hashStringToInt } from "../src/core/rng";
-import { CURRENT_TERRAIN_GENERATOR_VERSION, TERRAIN_GENERATOR_VERSION_LEGACY } from "../src/core/terrain";
+import {
+  CURRENT_TERRAIN_GENERATOR_VERSION,
+  TERRAIN_GENERATOR_VERSION_BIOMES,
+  TERRAIN_GENERATOR_VERSION_LEGACY
+} from "../src/core/terrain";
+import { buildChunkMesh } from "../src/render/chunkMesher";
 
 const STONE = getBlockDefByKey("stone").id;
 const GLASS = getBlockDefByKey("glass").id;
@@ -75,6 +80,40 @@ describe("World", () => {
     expect(second.unloaded.length).toBeGreaterThan(0);
   });
 
+  it("Phase 5: hasLoadedChunk/loadedChunkCountはensureChunkで読み込んだチャンクを反映する", () => {
+    const world = new World(hashStringToInt("w8b"), "w8b");
+    expect(world.hasLoadedChunk(0, 0)).toBe(false);
+    expect(world.loadedChunkCount).toBe(0);
+    world.ensureChunk(0, 0);
+    expect(world.hasLoadedChunk(0, 0)).toBe(true);
+    expect(world.loadedChunkCount).toBe(1);
+    expect(world.hasLoadedChunk(1, 0)).toBe(false);
+  });
+
+  it("Phase 5: unloadChunksOutsideは生成を行わず、範囲外に既にロード済みのチャンクだけを破棄する", () => {
+    const world = new World(hashStringToInt("w8c"), "w8c");
+    world.ensureChunk(0, 0);
+    world.ensureChunk(1, 0);
+    expect(world.loadedChunkCount).toBe(2);
+
+    // 半径0(中心のみ)の外側にあるチャンクだけがアンロードされ、新規生成は起きない
+    const unloaded = world.unloadChunksOutside(0, 0, 0);
+    expect(unloaded).toContain("1,0");
+    expect(world.hasLoadedChunk(0, 0)).toBe(true);
+    expect(world.hasLoadedChunk(1, 0)).toBe(false);
+    expect(world.loadedChunkCount).toBe(1);
+  });
+
+  it("Phase 5: メッシュ境界確認は未ロードの隣接チャンクを暗黙生成しない", () => {
+    const world = new World(hashStringToInt("mesh-budget"), "mesh-budget");
+    const chunk = world.ensureChunk(0, 0);
+    expect(world.loadedChunkCount).toBe(1);
+    const mesh = buildChunkMesh(world, chunk);
+    expect(world.loadedChunkCount).toBe(1);
+    mesh.solid?.dispose();
+    mesh.transparent?.dispose();
+  });
+
   it("編集はアンロード/再ロードしても保持される (地形からの差分として)", () => {
     const world = new World(hashStringToInt("w9"), "w9");
     world.setBlock(2, Y, 2, STONE);
@@ -135,5 +174,80 @@ describe("World", () => {
     world.setBlock(0, Y, 0, STONE);
     expect(world.isLiquid(0, Y, 0)).toBe(false);
     expect(world.isLiquid(0, Y + 1, 0)).toBe(false); // 空気
+  });
+});
+
+describe("Phase 4: 生成宝箱の座標判定と開封済みマーカー", () => {
+  it("旧地形ジェネレーター(v1)のワールドには遺跡が存在しないため常にfalseを返す", () => {
+    const world = new World(hashStringToInt("treasure-legacy"), "treasure-legacy", TERRAIN_GENERATOR_VERSION_LEGACY);
+    for (let x = -40; x <= 40; x += 5) {
+      for (let z = -40; z <= 40; z += 5) {
+        expect(world.isGeneratedRuinChestLocation(x, 20, z)).toBe(false);
+      }
+    }
+  });
+
+  it("地形v2ワールドでは洞窟判定を維持しつつ、v3宝箱報酬だけを無効にする", () => {
+    const world = new World(hashStringToInt("phase3-caves"), "phase3-caves", TERRAIN_GENERATOR_VERSION_BIOMES);
+    let foundCave = false;
+    for (let x = -24; x <= 24 && !foundCave; x += 3) {
+      for (let z = -24; z <= 24 && !foundCave; z += 3) {
+        for (let y = 5; y < 30 && !foundCave; y++) {
+          foundCave = world.isNaturalCaveAt(x, y, z);
+          expect(world.isGeneratedRuinChestLocation(x, y, z)).toBe(false);
+        }
+      }
+    }
+    expect(foundCave).toBe(true);
+  });
+
+  it("最新ジェネレーターのワールドでは、実際にチェストブロックが生成される座標でtrueを返す", () => {
+    const world = new World(hashStringToInt("treasure-v2"), "treasure-v2");
+    const CHEST = getBlockDefByKey("chest").id;
+    let foundMatch = false;
+    for (let cx = -6; cx <= 6 && !foundMatch; cx++) {
+      for (let cz = -6; cz <= 6 && !foundMatch; cz++) {
+        const chunk = world.ensureChunk(cx, cz);
+        for (let lx = 0; lx < 16 && !foundMatch; lx++) {
+          for (let lz = 0; lz < 16 && !foundMatch; lz++) {
+            for (let ly = 0; ly < 64 && !foundMatch; ly++) {
+              if (chunk.getId(lx, ly, lz) !== CHEST) continue;
+              const worldX = cx * 16 + lx;
+              const worldZ = cz * 16 + lz;
+              expect(world.isGeneratedRuinChestLocation(worldX, ly, worldZ)).toBe(true);
+              foundMatch = true;
+            }
+          }
+        }
+      }
+    }
+    expect(foundMatch).toBe(true);
+  });
+
+  it("開封済みマーカーは座標ごとに独立して記録・保存・復元できる", () => {
+    const world = new World(hashStringToInt("loot1"), "loot1");
+    expect(world.isTreasureLooted(1, 2, 3)).toBe(false);
+    world.markTreasureLooted(1, 2, 3);
+    expect(world.isTreasureLooted(1, 2, 3)).toBe(true);
+    expect(world.isTreasureLooted(4, 5, 6)).toBe(false);
+
+    const saved = world.getLootedTreasures();
+    expect(saved).toEqual(["1,2,3"]);
+
+    const world2 = new World(hashStringToInt("loot1"), "loot1");
+    world2.loadLootedTreasures(saved);
+    expect(world2.isTreasureLooted(1, 2, 3)).toBe(true);
+  });
+
+  it("ブロックを壊して同じ座標に再設置しても、開封済みマーカーは残り続ける (連続入手を防ぐ)", () => {
+    const world = new World(hashStringToInt("loot2"), "loot2");
+    const CHEST = getBlockDefByKey("chest").id;
+    world.setBlock(5, 30, 5, CHEST);
+    world.markTreasureLooted(5, 30, 5);
+
+    world.setBlock(5, 30, 5, AIR_ID); // 破壊
+    world.setBlock(5, 30, 5, CHEST); // 再設置 (クラフトした宝箱)
+
+    expect(world.isTreasureLooted(5, 30, 5)).toBe(true);
   });
 });

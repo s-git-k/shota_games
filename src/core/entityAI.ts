@@ -26,16 +26,32 @@ export interface EntityRuntime {
   breedCooldown: number;
 }
 
+export const MAX_ENTITY_ID = 1_000_000_000;
 let nextEntityId = 1;
 
 export function resetEntityIdCounterForTests(): void {
   nextEntityId = 1;
 }
 
+/**
+ * 保存データから生物を復元するときに使う: 次に発行するIDが、復元された生物IDと
+ * 衝突しないよう (常に既存の最大ID以上になるよう) カウンターを引き上げる。
+ * 既にそれ以上の値であれば何もしない (逆方向には動かさない)。
+ */
+export function ensureEntityIdCounterAtLeast(minNextId: number): void {
+  if (minNextId > MAX_ENTITY_ID) {
+    nextEntityId = 1;
+  } else if (minNextId > nextEntityId) {
+    nextEntityId = minNextId;
+  }
+}
+
 export function createEntityRuntime(kind: EntityKind, x: number, y: number, z: number, yaw = 0): EntityRuntime {
   const def = getEntityDef(kind);
+  const id = nextEntityId;
+  nextEntityId = nextEntityId >= MAX_ENTITY_ID ? 1 : nextEntityId + 1;
   return {
-    id: nextEntityId++,
+    id,
     kind,
     x,
     y,

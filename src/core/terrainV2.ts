@@ -69,7 +69,7 @@ function subSurfaceBlockForBiome(biome: Biome, surface: number): number {
  * すべてワールド座標 + シードのみから決まる純粋な計算のため、周囲チャンクの読み込み
  * 順序に一切依存しない (どの順で呼び出しても常に同じ結果になる)。
  */
-export function generateChunkIdsV2(seed: number, cx: number, cz: number): Uint8Array {
+export function generateChunkIdsV2(seed: number, cx: number, cz: number, useTreasureChests = true): Uint8Array {
   const ids = new Uint8Array(CHUNK_SIZE_X * CHUNK_SIZE_Z * CHUNK_HEIGHT);
   const baseX = cx * CHUNK_SIZE_X;
   const baseZ = cz * CHUNK_SIZE_Z;
@@ -122,7 +122,15 @@ export function generateChunkIdsV2(seed: number, cx: number, cz: number): Uint8A
   }
 
   // 地下遺跡 (存在すれば、チャンク内部に完結する形でスタンプする)
-  stampRuinIfAny(ids, seed, cx, cz, CHUNK_HEIGHT, (lx, lz) => heights[lz * CHUNK_SIZE_X + lx] ?? SEA_LEVEL);
+  stampRuinIfAny(
+    ids,
+    seed,
+    cx,
+    cz,
+    CHUNK_HEIGHT,
+    (lx, lz) => heights[lz * CHUNK_SIZE_X + lx] ?? SEA_LEVEL,
+    useTreasureChests
+  );
 
   // 木の配置 (境界から2マス以上離れた場所のみ)。バイオームごとに密度と樹種を変える。
   for (let lx = 2; lx < CHUNK_SIZE_X - 2; lx++) {
