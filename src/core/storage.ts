@@ -7,11 +7,16 @@ import { validateAndMigrateWorldSave, parseWorldFromJson, type WorldSaveData } f
 import { DEFAULT_SETTINGS, clampSettings, type GameSettings } from "./settings";
 import { DEFAULT_AVATAR, type AvatarConfig } from "./avatar";
 import { DEFAULT_GAME_MODE, isGameMode, type GameMode } from "./gameMode";
+import { validateAndMigrateBlueprint, serializeBlueprintToJson, type BlueprintRecord } from "./blueprint";
 
 const DB_NAME = "tsumiki-oukoku";
-const DB_VERSION = 1;
+// Phase 4: 設計図(ブループリント)保存用ストアを追加したため2へ更新。
+// onupgradeneeded は追加のみ行い、既存の worlds/kv ストアには一切手を触れない
+// (既存ワールド・設定・アバターは削除・変更されない)。
+const DB_VERSION = 2;
 const STORE_WORLDS = "worlds";
 const STORE_KV = "kv";
+const STORE_BLUEPRINTS = "blueprints";
 
 export class StorageError extends Error {
   constructor(message: string) {
@@ -37,6 +42,9 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(STORE_KV)) {
         db.createObjectStore(STORE_KV, { keyPath: "key" });
+      }
+      if (!db.objectStoreNames.contains(STORE_BLUEPRINTS)) {
+        db.createObjectStore(STORE_BLUEPRINTS, { keyPath: "id" });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -125,6 +133,67 @@ export async function importWorldFromJson(text: string): Promise<WorldSaveData> 
   return imported;
 }
 
+// --- Phase 4: 設計図(ブループリント)ライブラリ ---
+// クリエイティブの範囲選択/コピー内容を、ワールドをまたいで再利用できるように保存する。
+
+export async function listBlueprints(): Promise<BlueprintRecord[]> {
+  const db = await openDb();
+  const tx = db.transaction(STORE_BLUEPRINTS, "readonly");
+  const all = await promisifyRequest(tx.objectStore(STORE_BLUEPRINTS).getAll());
+  return (all as unknown[])
+    .map((raw) => validateAndMigrateBlueprint(raw))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+export async function loadBlueprint(id: string): Promise<BlueprintRecord | undefined> {
+  const db = await openDb();
+  const tx = db.transaction(STORE_BLUEPRINTS, "readonly");
+  const raw = await promisifyRequest(tx.objectStore(STORE_BLUEPRINTS).get(id));
+  if (raw === undefined) return undefined;
+  return validateAndMigrateBlueprint(raw);
+}
+
+export async function saveBlueprint(record: BlueprintRecord): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction(STORE_BLUEPRINTS, "readwrite");
+  tx.objectStore(STORE_BLUEPRINTS).put(record);
+  await promisifyTransaction(tx);
+}
+
+export async function deleteBlueprint(id: string): Promise<void> {
+  const db = await openDb();
+  const tx = db.transaction(STORE_BLUEPRINTS, "readwrite");
+  tx.objectStore(STORE_BLUEPRINTS).delete(id);
+  await promisifyTransaction(tx);
+}
+
+export async function renameBlueprint(id: string, newName: string): Promise<void> {
+  const blueprint = await loadBlueprint(id);
+  if (!blueprint) {
+    throw new StorageError("指定された設計図が見つかりませんでした。");
+  }
+  const renamed = validateAndMigrateBlueprint({ ...blueprint, name: newName, updatedAt: Date.now() });
+  await saveBlueprint(renamed);
+}
+
+/** JSONテキストから設計図をインポートする。常に新しいIDを割り当てて既存データの上書きを防ぐ。 */
+export async function importBlueprintFromJson(text: string): Promise<BlueprintRecord> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new StorageError("JSONとして読み込めませんでした。ファイルが破損している可能性があります。");
+  }
+  const validated = validateAndMigrateBlueprint(parsed);
+  const imported: BlueprintRecord = { ...validated, id: generateId(), updatedAt: Date.now() };
+  await saveBlueprint(imported);
+  return imported;
+}
+
+export function exportBlueprintToJson(record: BlueprintRecord): string {
+  return serializeBlueprintToJson(record);
+}
+
 function promisifyTransaction(tx: IDBTransaction): Promise<void> {
   return new Promise((resolve, reject) => {
     tx.oncomplete = () => resolve();
@@ -188,4 +257,39 @@ export async function hasSeenOnboarding(): Promise<boolean> {
 
 export async function setOnboardingSeen(): Promise<void> {
   await putKv("onboardingSeen", true);
+}
+
+/**
+ * Phase 5: ワールドごとの「はじめてのチュートリアル」チェックリストの進捗。
+ * セーブデータ本体 (WorldSaveData) には含めず、UIの表示状態としてKVストアに
+ * ワールドIDごとに保持する (ゲームプレイ上の状態ではないため)。
+ */
+export interface TutorialChecklistState {
+  /** ユーザーが手動で閉じた/全項目完了して自動的に閉じた場合に true。 */
+  dismissed: boolean;
+  /** 完了済みの項目ID一覧。 */
+  completedSteps: string[];
+}
+
+const DEFAULT_TUTORIAL_STATE: TutorialChecklistState = { dismissed: false, completedSteps: [] };
+
+function tutorialKey(worldId: string): string {
+  return `tutorial:${worldId}`;
+}
+
+export async function loadTutorialChecklistState(worldId: string): Promise<TutorialChecklistState> {
+  try {
+    const raw = await getKv<TutorialChecklistState>(tutorialKey(worldId));
+    if (!raw || typeof raw !== "object") return { ...DEFAULT_TUTORIAL_STATE };
+    return {
+      dismissed: Boolean(raw.dismissed),
+      completedSteps: Array.isArray(raw.completedSteps) ? raw.completedSteps.filter((s) => typeof s === "string") : []
+    };
+  } catch {
+    return { ...DEFAULT_TUTORIAL_STATE };
+  }
+}
+
+export async function saveTutorialChecklistState(worldId: string, state: TutorialChecklistState): Promise<void> {
+  await putKv(tutorialKey(worldId), state);
 }

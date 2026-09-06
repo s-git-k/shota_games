@@ -133,6 +133,10 @@ export function openSettingsPanel(
     settings = { ...settings, touchControlsEnabled: v };
     onChange(clampSettings(settings));
   });
+  checkboxRow("デバッグ情報を表示する (FPS/チャンク数/生物数など)", settings.debugHudEnabled, (v) => {
+    settings = { ...settings, debugHudEnabled: v };
+    onChange(clampSettings(settings));
+  });
 
   modal.body.appendChild(el("h3", "settings-section-title", "キー割り当て"));
   modal.body.appendChild(el("p", "modal-hint", "ボタンを押してから、割り当てたいキーを押してください。"));

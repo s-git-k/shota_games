@@ -15,8 +15,20 @@ import {
   worldToChunkCoord,
   worldToLocal
 } from "./chunk";
-import { generateChunk, CURRENT_TERRAIN_GENERATOR_VERSION } from "./terrain";
+import {
+  generateChunk,
+  CURRENT_TERRAIN_GENERATOR_VERSION,
+  TERRAIN_GENERATOR_VERSION_BIOMES,
+  TERRAIN_GENERATOR_VERSION_TREASURE
+} from "./terrain";
+import { terrainHeightV2 } from "./terrainV2";
+import { isCaveAt, isGeneratedRuinChestAt } from "./underground";
 import type { Facing, Vec3Int } from "./types";
+
+/** "x,y,z" 形式のキーへ変換する (開封済み宝箱など、座標をSetで管理するための共通ヘルパー)。 */
+export function posKey(x: number, y: number, z: number): string {
+  return `${x},${y},${z}`;
+}
 
 export interface BlockEdit {
   index: number;
@@ -48,6 +60,12 @@ export class World {
   private chunks = new Map<string, Chunk>();
   /** チャンクキー -> (localIndex -> 差分) 保存/復元・再生成のための唯一の真実の情報源 */
   private edits = new Map<string, Map<number, BlockEdit>>();
+  /**
+   * 開封済みの生成遺跡宝箱の座標集合 ("x,y,z"形式)。
+   * 一度でも開封されると恒久的にここへ記録され、ブロックの破壊/再設置を経ても再度宝は出ない
+   * (詳細は isGeneratedRuinChestLocation / markTreasureLooted のコメントを参照)。
+   */
+  private lootedTreasures = new Set<string>();
 
   constructor(seed: number, seedText: string, generatorVersion: number = CURRENT_TERRAIN_GENERATOR_VERSION) {
     this.seed = seed;
@@ -85,6 +103,16 @@ export class World {
     return this.chunks.get(chunkKey(cx, cz));
   }
 
+  /** 生成済み(メモリにロード済み)かどうかだけを、生成を発生させずに調べる。 */
+  hasLoadedChunk(cx: number, cz: number): boolean {
+    return this.chunks.has(chunkKey(cx, cz));
+  }
+
+  /** 現在ロード済みのチャンク数 (診断/デバッグHUD用)。 */
+  get loadedChunkCount(): number {
+    return this.chunks.size;
+  }
+
   getBlockId(x: number, y: number, z: number): number {
     if (y < 0 || y >= CHUNK_HEIGHT) return AIR_ID;
     const cx = worldToChunkCoord(x);
@@ -93,6 +121,16 @@ export class World {
     const lx = worldToLocal(x, CHUNK_SIZE_X);
     const lz = worldToLocal(z, CHUNK_SIZE_Z);
     return chunk.getId(lx, y, lz);
+  }
+
+  /** メッシュ境界確認用。未ロードの隣接チャンクを生成せず、空気として扱う。 */
+  getLoadedBlockId(x: number, y: number, z: number): number {
+    if (y < 0 || y >= CHUNK_HEIGHT) return AIR_ID;
+    const cx = worldToChunkCoord(x);
+    const cz = worldToChunkCoord(z);
+    const chunk = this.getLoadedChunk(cx, cz);
+    if (!chunk) return AIR_ID;
+    return chunk.getId(worldToLocal(x, CHUNK_SIZE_X), y, worldToLocal(z, CHUNK_SIZE_Z));
   }
 
   getBlockFacing(x: number, y: number, z: number): Facing {
@@ -196,7 +234,19 @@ export class World {
       }
     }
 
-    const unloadRadius = radius + unloadBuffer;
+    const unloaded = this.unloadChunksOutside(centerCx, centerCz, radius + unloadBuffer);
+
+    return { loaded, unloaded };
+  }
+
+  /**
+   * 中心チャンクから distance が unloadRadius を超えるロード済みチャンクを破棄する
+   * (新規生成は一切行わない、アンロード専用の軽量な操作)。
+   * Phase 5: WorldRenderer が「範囲内を毎フレーム全部生成する」syncLoadedChunks の
+   * 代わりに、生成は予算付きキュー (chunkQueue.ts) で分散させつつ、アンロードだけは
+   * 従来通り即座に行うために使う。
+   */
+  unloadChunksOutside(centerCx: number, centerCz: number, unloadRadius: number): string[] {
     const unloaded: string[] = [];
     for (const key of this.chunks.keys()) {
       const { cx, cz } = parseChunkKey(key);
@@ -209,8 +259,7 @@ export class World {
     for (const key of unloaded) {
       this.chunks.delete(key);
     }
-
-    return { loaded, unloaded };
+    return unloaded;
   }
 
   getAllEdits(): ReadonlyMap<string, Map<number, BlockEdit>> {
@@ -239,5 +288,43 @@ export class World {
 
   toVec(x: number, y: number, z: number): Vec3Int {
     return { x, y, z };
+  }
+
+  /**
+   * この座標が「地形生成時に配置された遺跡の宝箱」の位置と一致するかどうか (決定論的・純粋)。
+   * Phase 3以前 (旧地形ジェネレーター) のワールドには遺跡自体が存在しないため常にfalseを返す。
+   * これは座標だけを見た判定であり、実際に今そこにチェストブロックがあるかどうかは問わない
+   * (呼び出し側でブロックIDも確認すること)。
+   */
+  isGeneratedRuinChestLocation(x: number, y: number, z: number): boolean {
+    if (this.generatorVersion < TERRAIN_GENERATOR_VERSION_TREASURE) return false;
+    return isGeneratedRuinChestAt(this.seed, x, y, z, (wx, wz) => terrainHeightV2(this.seed, wx, wz));
+  }
+
+  /** 洞窟(自然生成された地下空洞)の内部座標かどうか。「初めて洞窟を発見した」実績判定に使う。 */
+  isNaturalCaveAt(x: number, y: number, z: number): boolean {
+    if (this.generatorVersion < TERRAIN_GENERATOR_VERSION_BIOMES) return false;
+    const surfaceHeight = terrainHeightV2(this.seed, x, z);
+    return isCaveAt(this.seed, x, y, z, surfaceHeight);
+  }
+
+  /** 指定座標の生成宝箱が既に開封済み(初回入手済み)かどうか。 */
+  isTreasureLooted(x: number, y: number, z: number): boolean {
+    return this.lootedTreasures.has(posKey(x, y, z));
+  }
+
+  /** 指定座標を開封済みとして永続的に記録する (以後二度と宝は出ない)。 */
+  markTreasureLooted(x: number, y: number, z: number): void {
+    this.lootedTreasures.add(posKey(x, y, z));
+  }
+
+  /** 保存用: 開封済み座標一覧を返す。 */
+  getLootedTreasures(): string[] {
+    return Array.from(this.lootedTreasures);
+  }
+
+  /** 保存データからの復元用。 */
+  loadLootedTreasures(keys: Iterable<string>): void {
+    this.lootedTreasures = new Set(keys);
   }
 }

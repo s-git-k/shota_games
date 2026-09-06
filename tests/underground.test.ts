@@ -4,12 +4,13 @@ import {
   CAVE_MIN_Y,
   groundwaterLevelForBiome,
   isCaveAt,
+  isGeneratedRuinChestAt,
   isGroundwaterAt,
   oreForVoxel,
   ruinPlanForChunk,
   stampRuinIfAny
 } from "../src/core/underground";
-import { CHUNK_HEIGHT, CHUNK_SIZE_X, CHUNK_SIZE_Z, BLOCKS_PER_CHUNK, localIndex } from "../src/core/chunk";
+import { CHUNK_HEIGHT, CHUNK_SIZE_X, CHUNK_SIZE_Z, BLOCKS_PER_CHUNK, localIndex, worldToChunkCoord } from "../src/core/chunk";
 import { getBlockDefByKey } from "../src/core/blocks";
 import { SEA_LEVEL } from "../src/core/worldgenConstants";
 
@@ -195,5 +196,102 @@ describe("ruinPlanForChunk / stampRuinIfAny", () => {
       }
     }
     expect(stampedSomewhere).toBe(true);
+  });
+
+  it("遺跡の部屋中央の床には宝箱(chest)が配置される", () => {
+    const CHEST = getBlockDefByKey("chest").id;
+    let foundChest = false;
+    for (let cx = -30; cx <= 30 && !foundChest; cx++) {
+      for (let cz = -30; cz <= 30 && !foundChest; cz++) {
+        const plan = ruinPlanForChunk(seed, cx, cz, flatHeight);
+        if (!plan) continue;
+        const ids = new Uint8Array(BLOCKS_PER_CHUNK);
+        stampRuinIfAny(ids, seed, cx, cz, CHUNK_HEIGHT, flatHeight);
+        const centerLx = plan.localOriginX + Math.floor(plan.sizeX / 2);
+        const centerLz = plan.localOriginZ + Math.floor(plan.sizeZ / 2);
+        if (ids[localIndex(centerLx, plan.baseY, centerLz)] === CHEST) foundChest = true;
+      }
+    }
+    expect(foundChest).toBe(true);
+  });
+
+  it("旧v2地形向け生成では遺跡中央の黄金ブロックを維持する", () => {
+    const GOLD = getBlockDefByKey("gold").id;
+    let foundGold = false;
+    for (let cx = -30; cx <= 30 && !foundGold; cx++) {
+      for (let cz = -30; cz <= 30 && !foundGold; cz++) {
+        const plan = ruinPlanForChunk(seed, cx, cz, flatHeight);
+        if (!plan) continue;
+        const ids = new Uint8Array(BLOCKS_PER_CHUNK);
+        stampRuinIfAny(ids, seed, cx, cz, CHUNK_HEIGHT, flatHeight, false);
+        const centerLx = plan.localOriginX + Math.floor(plan.sizeX / 2);
+        const centerLz = plan.localOriginZ + Math.floor(plan.sizeZ / 2);
+        foundGold = ids[localIndex(centerLx, plan.baseY, centerLz)] === GOLD;
+      }
+    }
+    expect(foundGold).toBe(true);
+  });
+});
+
+describe("isGeneratedRuinChestAt", () => {
+  const seed = hashStringToInt("underground-ruin");
+  const flatHeight = (_lx: number, _lz: number) => SURFACE;
+  const terrainHeightAtWorld = (_wx: number, _wz: number) => SURFACE;
+
+  it("決定論的: 同じ座標なら常に同じ結果", () => {
+    for (let x = -60; x <= 60; x += 3) {
+      for (let z = -60; z <= 60; z += 3) {
+        for (let y = 10; y <= 40; y += 5) {
+          expect(isGeneratedRuinChestAt(seed, x, y, z, terrainHeightAtWorld)).toBe(
+            isGeneratedRuinChestAt(seed, x, y, z, terrainHeightAtWorld)
+          );
+        }
+      }
+    }
+  });
+
+  it("stampRuinIfAnyが宝箱を置く座標とisGeneratedRuinChestAtが一致する", () => {
+    const CHEST = getBlockDefByKey("chest").id;
+    let checkedAny = false;
+    for (let cx = -20; cx <= 20; cx++) {
+      for (let cz = -20; cz <= 20; cz++) {
+        const plan = ruinPlanForChunk(seed, cx, cz, flatHeight);
+        if (!plan) continue;
+        const ids = new Uint8Array(BLOCKS_PER_CHUNK);
+        stampRuinIfAny(ids, seed, cx, cz, CHUNK_HEIGHT, flatHeight);
+        for (let lx = plan.localOriginX; lx < plan.localOriginX + plan.sizeX; lx++) {
+          for (let lz = plan.localOriginZ; lz < plan.localOriginZ + plan.sizeZ; lz++) {
+            for (let ly = plan.baseY; ly < plan.baseY + plan.height; ly++) {
+              const worldX = cx * CHUNK_SIZE_X + lx;
+              const worldZ = cz * CHUNK_SIZE_Z + lz;
+              const isChestBlock = ids[localIndex(lx, ly, lz)] === CHEST;
+              const predicate = isGeneratedRuinChestAt(seed, worldX, ly, worldZ, terrainHeightAtWorld);
+              expect(predicate).toBe(isChestBlock);
+              checkedAny = checkedAny || isChestBlock;
+            }
+          }
+        }
+      }
+    }
+    expect(checkedAny).toBe(true);
+  });
+
+  it("遺跡の存在しないチャンク座標では常にfalseを返す", () => {
+    for (let cx = -20; cx <= 20; cx++) {
+      for (let cz = -20; cz <= 20; cz++) {
+        if (ruinPlanForChunk(seed, cx, cz, flatHeight)) continue;
+        const worldX = cx * CHUNK_SIZE_X + 5;
+        const worldZ = cz * CHUNK_SIZE_Z + 5;
+        for (let y = 10; y <= 35; y += 5) {
+          expect(isGeneratedRuinChestAt(seed, worldX, y, worldZ, terrainHeightAtWorld)).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("チャンク境界をまたぐ負の座標でも一貫して動作する", () => {
+    const cx = worldToChunkCoord(-5);
+    expect(cx).toBeLessThan(0);
+    expect(() => isGeneratedRuinChestAt(seed, -5, 20, -5, terrainHeightAtWorld)).not.toThrow();
   });
 });

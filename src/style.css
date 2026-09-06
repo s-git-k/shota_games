@@ -855,3 +855,60 @@ a:focus-visible,
   font-weight: 600;
 }
 
+/* ---------- Phase 5: はじめてのチェックリスト ---------- */
+.tutorial-checklist {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  max-width: 280px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(20, 24, 34, 0.78);
+  color: #fff;
+  font-size: 12.5px;
+  line-height: 1.5;
+  pointer-events: auto;
+  z-index: 15;
+}
+
+.tutorial-checklist-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.tutorial-checklist-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+.tutorial-checklist-item {
+  opacity: 0.85;
+}
+
+.tutorial-checklist-item.done {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+
+.tutorial-checklist-close {
+  font-size: 11.5px;
+  padding: 4px 10px;
+}
+
+/* ---------- Phase 5: デバッグHUD ---------- */
+.debug-hud {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.65);
+  color: #7CFC98;
+  font-family: monospace;
+  font-size: 11.5px;
+  white-space: pre-line;
+  pointer-events: none;
+  z-index: 15;
+}
+

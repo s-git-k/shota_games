@@ -20,7 +20,9 @@ export type ActionId =
   | "selectionPaste"
   | "selectionMark"
   | "openInventory"
-  | "openSettings";
+  | "openSettings"
+  | "openBuildMenu"
+  | "openProgress";
 
 export interface KeyBindings {
   [action: string]: string;
@@ -43,7 +45,9 @@ export const DEFAULT_KEY_BINDINGS: Record<ActionId, string> = {
   selectionPaste: "KeyX",
   selectionMark: "KeyB",
   openInventory: "KeyI",
-  openSettings: "Escape"
+  openSettings: "Escape",
+  openBuildMenu: "KeyG",
+  openProgress: "KeyP"
 };
 
 export const ACTION_LABELS_JA: Record<ActionId, string> = {
@@ -63,7 +67,9 @@ export const ACTION_LABELS_JA: Record<ActionId, string> = {
   selectionPaste: "貼り付け",
   selectionMark: "選択の開始/終了",
   openInventory: "インベントリ / クラフトを開く",
-  openSettings: "設定/一時停止"
+  openSettings: "設定/一時停止",
+  openBuildMenu: "建築メニュー (選択/設計図/回転/反転)を開く",
+  openProgress: "探索の記録 (実績/進捗)を開く"
 };
 
 export type QualityLevel = "low" | "medium" | "high";
@@ -79,6 +85,8 @@ export interface GameSettings {
   cameraShake: boolean;
   reducedMotion: boolean;
   touchControlsEnabled: boolean;
+  /** Phase 5: FPS/チャンク数/生物数などの軽量な実行時診断を表示するデバッグHUD。既定は無効。 */
+  debugHudEnabled: boolean;
   keyBindings: Record<ActionId, string>;
 }
 
@@ -93,6 +101,7 @@ export const DEFAULT_SETTINGS: GameSettings = {
   cameraShake: false,
   reducedMotion: false,
   touchControlsEnabled: true,
+  debugHudEnabled: false,
   keyBindings: { ...DEFAULT_KEY_BINDINGS }
 };
 

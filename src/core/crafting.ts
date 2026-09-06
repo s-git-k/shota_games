@@ -34,6 +34,9 @@ const SWITCH = getBlockDefByKey("switch").key;
 const WIRE = getBlockDefByKey("wire").key;
 const LAMP = getBlockDefByKey("lamp").key;
 const BED = getBlockDefByKey("bed").key;
+const CHEST = getBlockDefByKey("chest").key;
+const TABLE = getBlockDefByKey("table").key;
+const CHAIR = getBlockDefByKey("chair").key;
 
 export const RECIPES: readonly Recipe[] = [
   {
@@ -160,6 +163,30 @@ export const RECIPES: readonly Recipe[] = [
     outputKey: LAMP,
     outputCount: 1,
     descriptionJa: "ガラスと光晶石からランプを作ります。導線で電気を通すと光ります。"
+  },
+  {
+    id: "chest",
+    nameJa: "宝箱",
+    ingredients: [{ key: PLANKS, count: 8 }],
+    outputKey: CHEST,
+    outputCount: 1,
+    descriptionJa: "木の板から収納用の宝箱を作ります。設置してクリックすると開閉できます。"
+  },
+  {
+    id: "table",
+    nameJa: "テーブル",
+    ingredients: [{ key: PLANKS, count: 4 }],
+    outputKey: TABLE,
+    outputCount: 1,
+    descriptionJa: "木の板からテーブルを作ります。拠点を飾る家具です。"
+  },
+  {
+    id: "chair",
+    nameJa: "いす",
+    ingredients: [{ key: PLANKS, count: 3 }],
+    outputKey: CHAIR,
+    outputCount: 1,
+    descriptionJa: "木の板からいすを作ります。拠点を飾る家具です。"
   }
 ];
 

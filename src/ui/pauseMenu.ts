@@ -9,6 +9,9 @@ export interface PauseMenuActions {
   onOpenSettings: () => void;
   onOpenHelp: () => void;
   onOpenAvatar: () => void;
+  onOpenBuildMenu: () => void;
+  onOpenProgress: () => void;
+  onOpenTutorial: () => void;
   onBackToTitle: () => void;
 }
 
@@ -34,11 +37,31 @@ export function openPauseMenu(actions: PauseMenuActions): void {
   });
   modal.body.appendChild(avatarBtn);
 
+  const buildMenuBtn = button("建築メニュー (選択/設計図/回転/反転)", "btn btn-secondary");
+  buildMenuBtn.addEventListener("click", () => {
+    actions.onOpenBuildMenu();
+  });
+  modal.body.appendChild(buildMenuBtn);
+
+  const progressBtn = button("探索の記録 (実績/進捗)", "btn btn-secondary");
+  progressBtn.addEventListener("click", () => {
+    actions.onOpenProgress();
+  });
+  modal.body.appendChild(progressBtn);
+
   const helpBtn = button("操作ヘルプ", "btn btn-secondary");
   helpBtn.addEventListener("click", () => {
     actions.onOpenHelp();
   });
   modal.body.appendChild(helpBtn);
+
+  const tutorialBtn = button("はじめてのチェックリストを表示", "btn btn-secondary");
+  tutorialBtn.addEventListener("click", () => {
+    modal.close();
+    actions.onResume();
+    actions.onOpenTutorial();
+  });
+  modal.body.appendChild(tutorialBtn);
 
   const backBtn = button("タイトルに戻る (自動保存されます)", "btn btn-danger");
   backBtn.addEventListener("click", () => {

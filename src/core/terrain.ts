@@ -20,8 +20,10 @@ export { SEA_LEVEL, MAX_TERRAIN_HEIGHT };
 export const TERRAIN_GENERATOR_VERSION_LEGACY = 1;
 /** Phase 3 のバイオーム/洞窟/鉱脈/地下水/遺跡対応地形。新規ワールドはこちらを使う。 */
 export const TERRAIN_GENERATOR_VERSION_BIOMES = 2;
+/** Phase 4 の遺跡宝箱対応地形。v2ワールドの中央金ブロックを維持するため別世代にする。 */
+export const TERRAIN_GENERATOR_VERSION_TREASURE = 3;
 /** 新規ワールド作成時に使う最新バージョン。 */
-export const CURRENT_TERRAIN_GENERATOR_VERSION = TERRAIN_GENERATOR_VERSION_BIOMES;
+export const CURRENT_TERRAIN_GENERATOR_VERSION = TERRAIN_GENERATOR_VERSION_TREASURE;
 
 const GRASS = getBlockDefByKey("grass").id;
 const DIRT = getBlockDefByKey("dirt").id;
@@ -133,6 +135,8 @@ export function generateChunk(
   generatorVersion: number = CURRENT_TERRAIN_GENERATOR_VERSION
 ): Chunk {
   const ids =
-    generatorVersion >= TERRAIN_GENERATOR_VERSION_BIOMES ? generateChunkIdsV2(seed, cx, cz) : generateChunkIds(seed, cx, cz);
+    generatorVersion >= TERRAIN_GENERATOR_VERSION_BIOMES
+      ? generateChunkIdsV2(seed, cx, cz, generatorVersion >= TERRAIN_GENERATOR_VERSION_TREASURE)
+      : generateChunkIds(seed, cx, cz);
   return new Chunk(cx, cz, ids);
 }

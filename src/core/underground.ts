@@ -12,7 +12,7 @@
 import { fractalNoise3D, hash2D, hash3D } from "./rng";
 import { getBlockDefByKey } from "./blocks";
 import type { Biome } from "./biome";
-import { CHUNK_SIZE_X, CHUNK_SIZE_Z, localIndex } from "./chunk";
+import { CHUNK_SIZE_X, CHUNK_SIZE_Z, localIndex, worldToChunkCoord, worldToLocal } from "./chunk";
 import { SEA_LEVEL } from "./worldgenConstants";
 
 const STONE = getBlockDefByKey("stone").id;
@@ -23,6 +23,7 @@ const GLOW_CRYSTAL = getBlockDefByKey("glow_crystal").id;
 const STONE_BRICK = getBlockDefByKey("stone_brick").id;
 const COBBLESTONE = getBlockDefByKey("cobblestone").id;
 const MOSSY_STONE = getBlockDefByKey("mossy_stone").id;
+const CHEST = getBlockDefByKey("chest").id;
 
 /** この高さより下には洞窟を掘らない (最下層の岩盤を保証し、地形テストの前提も壊さない)。 */
 export const CAVE_MIN_Y = 4;
@@ -151,7 +152,16 @@ export function ruinPlanForChunk(
  * 遺跡の1ボクセル分のブロックIDを求める (壁/床/内部の空洞/中央の宝を決定論的に配置)。
  * 範囲外なら null を返す (呼び出し側は既存のブロックをそのまま使う)。
  */
-function ruinBlockAt(plan: RuinPlan, seed: number, cx: number, cz: number, lx: number, ly: number, lz: number): number | null {
+function ruinBlockAt(
+  plan: RuinPlan,
+  seed: number,
+  cx: number,
+  cz: number,
+  lx: number,
+  ly: number,
+  lz: number,
+  useTreasureChest: boolean
+): number | null {
   const dx = lx - plan.localOriginX;
   const dz = lz - plan.localOriginZ;
   const dy = ly - plan.baseY;
@@ -164,7 +174,8 @@ function ruinBlockAt(plan: RuinPlan, seed: number, cx: number, cz: number, lx: n
   const isCenter = dx === Math.floor(plan.sizeX / 2) && dz === Math.floor(plan.sizeZ / 2);
 
   if (isFloor) {
-    return isCenter && dy === 0 ? GOLD : COBBLESTONE;
+    // 部屋の中央には宝箱を配置する (座標ベースで決定論的な宝が入る。詳細は isGeneratedRuinChestAt を参照)。
+    return isCenter && dy === 0 ? (useTreasureChest ? CHEST : GOLD) : COBBLESTONE;
   }
   if (isWall) {
     // 一部の壁ブロックは苔むした石にして、古い遺跡らしい風化した見た目にする
@@ -174,7 +185,7 @@ function ruinBlockAt(plan: RuinPlan, seed: number, cx: number, cz: number, lx: n
     return mossRoll < 0.3 ? MOSSY_STONE : STONE_BRICK;
   }
   if (isCenter && dy === plan.height - 2) {
-    // 部屋の中央に光る目印を置く (宝箱の代わりの簡易的な目印)
+    // 部屋の中央上部に光る目印を置く (宝箱のある部屋を照らす光源)
     return GLOW_CRYSTAL;
   }
   return 0; // 内部は空洞 (空気)
@@ -190,7 +201,8 @@ export function stampRuinIfAny(
   cx: number,
   cz: number,
   chunkHeight: number,
-  terrainHeightAtLocal: (lx: number, lz: number) => number
+  terrainHeightAtLocal: (lx: number, lz: number) => number,
+  useTreasureChest = true
 ): void {
   const plan = ruinPlanForChunk(seed, cx, cz, terrainHeightAtLocal);
   if (!plan) return;
@@ -198,12 +210,41 @@ export function stampRuinIfAny(
     for (let lz = plan.localOriginZ; lz < plan.localOriginZ + plan.sizeZ; lz++) {
       for (let ly = plan.baseY; ly < plan.baseY + plan.height; ly++) {
         if (ly < 0 || ly >= chunkHeight) continue;
-        const blockId = ruinBlockAt(plan, seed, cx, cz, lx, ly, lz);
+        const blockId = ruinBlockAt(plan, seed, cx, cz, lx, ly, lz, useTreasureChest);
         if (blockId === null) continue;
         ids[localIndex(lx, ly, lz)] = blockId;
       }
     }
   }
+}
+
+/**
+ * 与えられたワールド座標 (x, y, z) が「生成された遺跡の宝箱」の位置と一致するかどうかを
+ * 純粋関数として判定する。同じシード・座標なら常に同じ結果になる (決定論的)。
+ *
+ * 実装上の注意: 実際にそこにチェスト(宝箱)ブロックが現在も存在するかどうかは判定しない
+ * (プレイヤーが壊しているかもしれない)。あくまで「本来そこに生成されるはずの宝箱の位置か」
+ * だけを問う純粋な地理的判定であり、初回開封判定は呼び出し側 (World) が持つ
+ * 「開封済み座標」の永続マーカーと組み合わせて使う。
+ */
+export function isGeneratedRuinChestAt(
+  seed: number,
+  x: number,
+  y: number,
+  z: number,
+  terrainHeightAtWorld: (worldX: number, worldZ: number) => number
+): boolean {
+  const cx = worldToChunkCoord(x);
+  const cz = worldToChunkCoord(z);
+  const lx = worldToLocal(x, CHUNK_SIZE_X);
+  const lz = worldToLocal(z, CHUNK_SIZE_Z);
+  const terrainHeightAtLocal = (localX: number, localZ: number): number =>
+    terrainHeightAtWorld(cx * CHUNK_SIZE_X + localX, cz * CHUNK_SIZE_Z + localZ);
+  const plan = ruinPlanForChunk(seed, cx, cz, terrainHeightAtLocal);
+  if (!plan) return false;
+  const centerLx = plan.localOriginX + Math.floor(plan.sizeX / 2);
+  const centerLz = plan.localOriginZ + Math.floor(plan.sizeZ / 2);
+  return lx === centerLx && lz === centerLz && y === plan.baseY;
 }
 
 export { STONE, WATER };

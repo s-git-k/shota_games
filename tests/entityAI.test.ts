@@ -3,6 +3,8 @@ import {
   applyDamageToEntity,
   canSpawnHostileAt,
   createEntityRuntime,
+  ensureEntityIdCounterAtLeast,
+  MAX_ENTITY_ID,
   pickSpawnOffset,
   resetEntityIdCounterForTests,
   shouldAttemptSpawn,
@@ -28,6 +30,15 @@ describe("entityAI", () => {
     const a = createEntityRuntime("slime", 0, 0, 0);
     const b = createEntityRuntime("slime", 0, 0, 0);
     expect(a.id).not.toBe(b.id);
+  });
+
+  it("最大IDの次は安全な範囲の先頭へ戻る", () => {
+    resetEntityIdCounterForTests();
+    ensureEntityIdCounterAtLeast(MAX_ENTITY_ID);
+    const last = createEntityRuntime("slime", 0, 0, 0);
+    const wrapped = createEntityRuntime("slime", 0, 0, 0);
+    expect(last.id).toBe(MAX_ENTITY_ID);
+    expect(wrapped.id).toBe(1);
   });
 
   it("applyDamageToEntity はHPを減らし、0以下でdead状態にする", () => {

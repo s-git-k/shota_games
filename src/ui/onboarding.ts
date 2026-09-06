@@ -5,7 +5,7 @@ import { ACTION_LABELS_JA, DEFAULT_KEY_BINDINGS } from "../core/settings";
 import { openModal } from "./modal";
 import { el, button } from "./dom";
 
-function labelForCode(code: string): string {
+export function labelForCode(code: string): string {
   if (code.startsWith("Key")) return code.slice(3);
   const specialLabels: Record<string, string> = {
     Space: "スペース",
@@ -35,7 +35,9 @@ function appendControlsHelp(container: HTMLElement): void {
     [labelForCode(DEFAULT_KEY_BINDINGS.selectionCopy), ACTION_LABELS_JA.selectionCopy],
     [labelForCode(DEFAULT_KEY_BINDINGS.selectionPaste), ACTION_LABELS_JA.selectionPaste],
     [labelForCode(DEFAULT_KEY_BINDINGS.openInventory), ACTION_LABELS_JA.openInventory],
-    [labelForCode(DEFAULT_KEY_BINDINGS.openSettings), ACTION_LABELS_JA.openSettings]
+    [labelForCode(DEFAULT_KEY_BINDINGS.openSettings), ACTION_LABELS_JA.openSettings],
+    [labelForCode(DEFAULT_KEY_BINDINGS.openBuildMenu), ACTION_LABELS_JA.openBuildMenu],
+    [labelForCode(DEFAULT_KEY_BINDINGS.openProgress), ACTION_LABELS_JA.openProgress]
   ];
   for (const [key, desc] of rows) {
     const li = el("li", "help-list-item");
@@ -88,7 +90,7 @@ function appendWorldHelp(container: HTMLElement): void {
     ["洞窟", "地下には歩き回れる空洞(洞窟)が自然に広がっており、掘り進んで探検できる"],
     ["鉱脈", "地下には金属パネル・黄金ブロック・光晶石が鉱石として埋まっている。深いところほど貴重なものが見つかりやすい"],
     ["地下水・海", "地下には地下水だまりが、地表には海(水没した低地)が広がる。水は透明で泳いで通り抜けられ、壁のように塞がれない"],
-    ["地下遺跡", "地下にはまれに古い遺跡が眠っており、黄金や光晶石などの目印を見つけられることがある"],
+    ["地下遺跡", "地下にはまれに古い遺跡が眠っており、黄金や光晶石、そして宝箱を見つけられることがある"],
     ["天候", "晴れ・雨・雪が時間とともに移り変わる。雪原・山地では雪、砂漠では雨が降らず晴れたまま、それ以外では雨になる"]
   ];
   for (const [key, desc] of rows) {
@@ -101,6 +103,43 @@ function appendWorldHelp(container: HTMLElement): void {
   container.appendChild(
     el("p", "modal-hint", "画面右上にバイオーム名と現在の天候が表示されます。水中では移動と落下がゆっくりになり、簡易的な水泳ができます。")
   );
+}
+
+function appendBuildToolsHelp(container: HTMLElement): void {
+  container.appendChild(el("h3", "settings-section-title", "建築補助ツール (Phase 4)"));
+  const list = el("ul", "help-list");
+  const rows: Array<[string, string]> = [
+    ["範囲選択", `[${labelForCode(DEFAULT_KEY_BINDINGS.selectionMark)}] で選択の始点/終点を指定し、直方体の範囲を選ぶ`],
+    ["コピー / 貼り付け", `[${labelForCode(DEFAULT_KEY_BINDINGS.selectionCopy)}] でコピー、[${labelForCode(DEFAULT_KEY_BINDINGS.selectionPaste)}] で貼り付け`],
+    ["建築メニュー", `[${labelForCode(DEFAULT_KEY_BINDINGS.openBuildMenu)}] または一時停止メニューから開き、コピー内容の90度回転・反転や設計図の保存/読込ができる`],
+    ["回転・反転", "建築メニューの回転(時計回り/反時計回り)・反転(X軸/Z軸)ボタンで、階段やドアの向きを保ったまま形を変えられる"],
+    ["設計図ライブラリ", "コピーした内容に名前を付けて保存し、別のワールドでも呼び出せる。書き出し(JSON)・読み込み・名前変更・削除に対応"],
+    ["クリエイティブ限定", "回転・反転・設計図の貼り付けはクリエイティブモード専用。サバイバルでは資源の複製を防ぐため利用できない"]
+  ];
+  for (const [key, desc] of rows) {
+    const li = el("li", "help-list-item");
+    li.appendChild(el("span", "help-key", key));
+    li.appendChild(el("span", "help-desc", desc));
+    list.appendChild(li);
+  }
+  container.appendChild(list);
+}
+
+function appendProgressHelp(container: HTMLElement): void {
+  container.appendChild(el("h3", "settings-section-title", "探索と実績 (Phase 4)"));
+  const list = el("ul", "help-list");
+  const rows: Array<[string, string]> = [
+    ["宝箱", "地下遺跡には宝箱が眠っていることがある。[E]で調べると1度だけ中身(金属や道具)が手に入り、以後は空になる"],
+    ["進捗パネル", `[${labelForCode(DEFAULT_KEY_BINDINGS.openProgress)}] または一時停止メニューから、発見したバイオーム・開けた宝箱・設置したブロック数・実績の達成状況を確認できる`],
+    ["実績", "初めてブロックを置く、100個置く、洞窟を発見する、全バイオームを巡る、遺跡の宝箱を開けるなど、達成すると画面に通知が表示され記録される"]
+  ];
+  for (const [key, desc] of rows) {
+    const li = el("li", "help-list-item");
+    li.appendChild(el("span", "help-key", key));
+    li.appendChild(el("span", "help-desc", desc));
+    list.appendChild(li);
+  }
+  container.appendChild(list);
 }
 
 export function showWelcomeOverlay(onClose: () => void): void {
@@ -125,6 +164,8 @@ export function showWelcomeOverlay(onClose: () => void): void {
   appendControlsHelp(modal.body);
   appendSurvivalHelp(modal.body);
   appendWorldHelp(modal.body);
+  appendBuildToolsHelp(modal.body);
+  appendProgressHelp(modal.body);
   const startBtn = button("はじめる", "btn btn-primary");
   startBtn.addEventListener("click", () => {
     modal.close();
@@ -138,4 +179,6 @@ export function showHelpOverlay(): void {
   appendControlsHelp(modal.body);
   appendSurvivalHelp(modal.body);
   appendWorldHelp(modal.body);
+  appendBuildToolsHelp(modal.body);
+  appendProgressHelp(modal.body);
 }

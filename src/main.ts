@@ -6,7 +6,7 @@ import type { WorldSaveData } from "./core/save";
 import { showTitleScreen } from "./ui/titleScreen";
 import { showWelcomeOverlay } from "./ui/onboarding";
 import { showError } from "./ui/notifications";
-import { Game } from "./game/game";
+import { Game } from "./game/voxelGame";
 
 async function main(): Promise<void> {
   const canvasEl = document.getElementById("game-canvas");

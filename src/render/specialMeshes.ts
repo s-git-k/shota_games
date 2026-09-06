@@ -183,6 +183,105 @@ function buildBed(color: number, facing: Facing): THREE.Object3D {
   return group;
 }
 
+/**
+ * 宝箱: 台座(下半分) + 蓋(上半分)。蓋は背面(facingの逆側)を蝶番にして開閉する。
+ * open=true で蓋が持ち上がり、中身が見える演出になる (Phase 4: 遺跡の宝箱/クラフト家具共通)。
+ */
+function buildChest(color: number, facing: Facing, open: boolean): THREE.Object3D {
+  const group = new THREE.Group();
+  const woodMat = materialFor(color);
+  const metalMat = materialFor(0xd8b25a);
+
+  const base = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.5, 0.75), woodMat);
+  base.position.set(0, -0.25, 0);
+  group.add(base);
+
+  // 蓋の蝶番 (奥/背面側の上端)。facing方向の正面 (-z寄り) に対して背面 (+z寄り) に置く。
+  const lidPivot = new THREE.Group();
+  lidPivot.position.set(0, 0, 0.375);
+  const lid = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.28, 0.75), woodMat);
+  lid.position.set(0, 0.14, -0.375);
+  lidPivot.add(lid);
+  // 開くと蝶番を軸に約100度持ち上がる (箱の蓋が後方へ倒れ込むイメージ)
+  lidPivot.rotation.x = open ? (100 * Math.PI) / 180 : 0;
+  group.add(lidPivot);
+
+  const latch = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.16, 0.06), metalMat);
+  latch.position.set(0, -0.05, -0.39);
+  group.add(latch);
+
+  group.rotation.y = facingToYaw[facing];
+
+  const anchor = new THREE.Group();
+  group.position.set(0.5, 0.5, 0.5);
+  anchor.add(group);
+  return anchor;
+}
+
+/** テーブル: 天板 + 4本脚のシンプルな家具。 */
+function buildTable(color: number, facing: Facing): THREE.Object3D {
+  const group = new THREE.Group();
+  const mat = materialFor(color);
+
+  const top = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.12, 0.9), mat);
+  top.position.set(0, 0.06, 0);
+  group.add(top);
+
+  const legMat = materialFor(0x6b4a30);
+  const legGeo = new THREE.BoxGeometry(0.1, 0.62, 0.1);
+  for (const [dx, dz] of [
+    [0.35, 0.35],
+    [-0.35, 0.35],
+    [0.35, -0.35],
+    [-0.35, -0.35]
+  ] as const) {
+    const leg = new THREE.Mesh(legGeo, legMat);
+    leg.position.set(dx, -0.31, dz);
+    group.add(leg);
+  }
+
+  group.rotation.y = facingToYaw[facing];
+
+  const anchor = new THREE.Group();
+  group.position.set(0.5, 0.5, 0.5);
+  anchor.add(group);
+  return anchor;
+}
+
+/** いす: 座面 + 背もたれ (facingの背面側) + 4本脚のシンプルな家具。 */
+function buildChair(color: number, facing: Facing): THREE.Object3D {
+  const group = new THREE.Group();
+  const mat = materialFor(color);
+
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.1, 0.55), mat);
+  seat.position.set(0, -0.05, 0);
+  group.add(seat);
+
+  const back = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.55, 0.08), mat);
+  back.position.set(0, 0.25, 0.24);
+  group.add(back);
+
+  const legMat = materialFor(0x6b4a30);
+  const legGeo = new THREE.BoxGeometry(0.07, 0.4, 0.07);
+  for (const [dx, dz] of [
+    [0.22, 0.22],
+    [-0.22, 0.22],
+    [0.22, -0.22],
+    [-0.22, -0.22]
+  ] as const) {
+    const leg = new THREE.Mesh(legGeo, legMat);
+    leg.position.set(dx, -0.3, dz);
+    group.add(leg);
+  }
+
+  group.rotation.y = facingToYaw[facing];
+
+  const anchor = new THREE.Group();
+  group.position.set(0.5, 0.5, 0.5);
+  anchor.add(group);
+  return anchor;
+}
+
 export function buildSpecialBlockMesh(instance: SpecialBlockInstance): THREE.Object3D {
   const def = getBlockDef(instance.blockId);
   let obj: THREE.Object3D;
@@ -207,6 +306,15 @@ export function buildSpecialBlockMesh(instance: SpecialBlockInstance): THREE.Obj
       break;
     case "bed":
       obj = buildBed(def.color, instance.facing);
+      break;
+    case "chest":
+      obj = buildChest(def.color, instance.facing, instance.open);
+      break;
+    case "table":
+      obj = buildTable(def.color, instance.facing);
+      break;
+    case "chair":
+      obj = buildChair(def.color, instance.facing);
       break;
     default:
       obj = buildFence(def.color);
